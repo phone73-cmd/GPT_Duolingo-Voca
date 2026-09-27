@@ -244,6 +244,7 @@ h1{font-size:32px}
 }
 @supports (-webkit-touch-callout:none){.cfgov{position:fixed!important;inset:0!important}.cfgdl{max-height:calc(100dvh - 32px);max-height:calc(-webkit-fill-available - 32px)}}
 
+.dupdl{max-width:640px;max-height:85dvh;overflow-y:auto}.dupgroup{border:1px solid var(--line);border-radius:14px;padding:12px;margin:12px 0}.dupgroup h3{margin:0 0 6px}.dupitem{display:flex;gap:10px;padding:12px 0;border-top:1px solid var(--line);align-items:flex-start}.dupitem input{width:20px;height:20px;flex:none}.dupitem>span{min-width:0;overflow-wrap:anywhere}.dupdetail{display:block;white-space:pre-wrap;font-size:14px;line-height:1.7}.dupitem small{color:var(--sub)}.dupdl .dr{position:sticky;bottom:-20px;background:var(--card);padding:12px 0}.afm{white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -378,7 +379,7 @@ function targetId(last){
   if(start.mode==='sec')return S.sections.some(x=>x.id===start.sec)?start.sec:'';
   return S.sections.some(x=>x.id===last)?last:'';
 }
-const APP_VERSION='Ver.1.0';
+const APP_VERSION='Ver.1.1';
 const stat=m=>{const e=$('#stat');if(e)e.textContent=m};
 async function flush(){
   if(!ref)return;
@@ -667,7 +668,7 @@ function openSheet(mode,w,secOverride){
     <span class="afm"></span>
     <input name="r" value="${val('r')}" placeholder="${pronLabel(s.lang)}">
     <input name="m" value="${val('m')}" placeholder="뜻">
-    <input name="e" value="${val('e')}" placeholder="예문 (선택)">
+    <textarea name="e" rows="2" placeholder="예문 (선택)">${val('e')}</textarea>
     <input type="hidden" name="h" value="${val('h')}">
     <div class="row"><button class="btn">${edit?'저장':'추가'}</button>${edit?'':'<button class="btn ghost" name="k" value="more">추가하고 계속</button>'}</div>
   </form>${bulk}</div></div>`;
@@ -715,9 +716,93 @@ function doCopy(targetId){
   closeDlg();save();render();
 }
 
+const dupTrim=v=>String(v||'').trim();
+const dupKey=w=>JSON.stringify([dupTrim(w.w),dupTrim(w.m)]);
+let dupUndo=null;
+try{dupUndo=JSON.parse(localStorage.getItem('vocab-merge-undo')||'null')}catch(e){}
+function duplicateGroups(scope){
+  const current=sec();if(!current)return [];
+  const groups=new Map();
+  S.sections.filter(s=>scope==='language'?(s.lang||'en')===(current.lang||'en'):s.id===current.id).forEach(s=>{
+    s.words.forEach(w=>{
+      const key=dupTrim(w.w).toLowerCase();if(!key)return;
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push({s,w});
+    });
+  });
+  return [...groups.values()].filter(g=>g.length>1);
+}
+function dupPartitions(items){
+  const map=new Map();items.forEach(it=>{
+    const key=JSON.stringify([it.s.id,dupKey(it.w)]);
+    if(!map.has(key))map.set(key,[]);map.get(key).push(it);
+  });return [...map.values()].filter(g=>g.length>1);
+}
+function dupSafe(g){return ['r','e','h'].every(k=>new Set(g.map(it=>dupTrim(it.w[k])).filter(Boolean)).size<=1)}
+function openDuplicates(scope='section',selected=[]){
+  const groups=duplicateGroups(scope),current=sec();if(!current)return;
+  dlg={k:'duplicates',scope,selected,items:groups.flat()};
+  drawDuplicates();
+}
+function drawDuplicates(){
+  const d=dlg;if(!d||d.k!=='duplicates')return;
+  const groups=duplicateGroups(d.scope),current=sec();
+  const rows=groups.map(g=>{
+    const meanings=new Set(g.map(it=>dupTrim(it.w.m))),spellings=new Set(g.map(it=>dupTrim(it.w.w)));
+    const notices=[meanings.size>1?'뜻이 다른 항목은 별도로 유지해요.':'',spellings.size>1?'대소문자가 다른 항목은 후보로만 표시해요.':''];
+    const parts=dupPartitions(g.filter(it=>it.s.id===current.id));
+    if(parts.some(p=>!dupSafe(p)))notices.push('발음·예문이 달라요. 선택해서 합치면 서로 다른 내용을 줄바꿈으로 모두 보존해요.');
+    return `<section class="dupgroup"><h3>${esc(g[0].w.w)}</h3><p class="ds">${notices.filter(Boolean).join(' ')||'같은 단어 후보를 비교해 주세요.'}</p>${g.map(it=>{
+      const index=d.items.findIndex(x=>x.s.id===it.s.id&&x.w.id===it.w.id);
+      const eligible=it.s.id===current.id&&parts.some(p=>p.some(x=>x.w.id===it.w.id));
+      return `<label class="dupitem">${eligible?`<input type="checkbox" data-dup-index="${index}" ${d.selected.includes(index)?'checked':''} aria-label="${esc(it.w.w)} · ${esc(it.w.m)} 선택">`:'<span aria-hidden="true">•</span>'}<span><b>${esc(it.w.w)}</b> <small>${esc(it.s.name)}</small><span class="dupdetail">뜻: ${esc(it.w.m)||'—'}<br>발음: ${esc(it.w.r)||'—'}<br>예문: ${esc(it.w.e)||'—'}${it.w.h?'<br>추가 표기: '+esc(it.w.h):''}<br>${it.w.star?'★ 즐겨찾기 · ':''}${it.w.known?'외움':'학습 중'}</span>${it.s.id!==current.id?'<small>다른 섹션 · 위치 안내만 제공</small>':''}</span></label>`;
+    }).join('')}</section>`;
+  }).join('');
+  const selected=d.selected.map(i=>d.items[i]).filter(Boolean);
+  const count=dupPartitions(selected).reduce((n,g)=>n+g.length-1,0);
+  $('#dlg').innerHTML=`<div class="ov"><div class="dl dupdl" role="dialog" aria-modal="true" aria-labelledby="duptitle">${DLX}<h2 id="duptitle">중복 확인</h2><div class="row"><button class="btn ${d.scope==='section'?'':'ghost'}" data-act="dupscope" data-scope="section">현재 섹션</button><button class="btn ${d.scope==='language'?'':'ghost'}" data-act="dupscope" data-scope="language">같은 언어 전체</button></div><p class="ds">앞뒤 공백을 무시해 비교해요. 현재 섹션에서 단어의 대소문자와 뜻이 같은 항목끼리만 합쳐요. 먼저 등록된 항목을 남기고 즐겨찾기·외움 상태를 유지해요.</p><button class="btn ghost" data-act="dupsafe">내용 충돌 없는 항목 선택</button>${rows||'<p class="empty">중복 후보가 없어요.</p>'}<p role="status" class="ds">${esc(d.message||'최근 합치기 1회를 되돌릴 수 있어요. 이후 해당 섹션의 단어가 바뀌면 되돌리기를 제한해요.')}</p><div class="dr"><button class="btn ghost" data-act="dupundo" ${dupUndo?'':'disabled'}>최근 합치기 되돌리기</button><button class="btn" data-act="dupmerge" ${count?'':'disabled'}>선택 항목 합치기 (${count}개 정리)</button></div></div></div>`;
+}
+function mergeDuplicates(){
+  const d=dlg,current=sec();if(!d||d.k!=='duplicates'||!current)return;
+  const items=d.selected.map(i=>d.items[i]).filter(it=>it&&it.s.id===current.id&&current.words.includes(it.w));
+  const groups=dupPartitions(items);if(!groups.length)return;
+  const before=JSON.parse(JSON.stringify(current.words));
+  groups.forEach(g=>{
+    const keep=g[0].w;
+    ['r','e','h'].forEach(k=>{
+      const vals=[...new Set(g.map(it=>dupTrim(it.w[k])).filter(Boolean))];
+      if(vals.length)keep[k]=vals.join(k==='e'?'\n':' / ');
+    });
+    keep.star=g.some(it=>it.w.star);keep.known=g.some(it=>it.w.known);
+    const removed=new Set(g.slice(1).map(it=>it.w.id));
+    current.words=current.words.filter(w=>!removed.has(w.id));
+  });
+  dupUndo={section:current.id,before,after:JSON.parse(JSON.stringify(current.words))};
+  try{localStorage.setItem('vocab-merge-undo',JSON.stringify(dupUndo))}catch(e){}
+  const scope=d.scope;saveNow();render();openDuplicates(scope);
+  stat('합쳤어요 · 중복 확인에서 되돌릴 수 있어요');
+}
+function undoDuplicates(){
+  if(!dupUndo)return;
+  const target=S.sections.find(s=>s.id===dupUndo.section);
+  if(!target||JSON.stringify(target.words)!==JSON.stringify(dupUndo.after)){
+    if(dlg&&dlg.k==='duplicates'){dlg.message='이후 단어가 변경되어 되돌릴 수 없어요. 현재 내용을 보호했어요.';drawDuplicates();}return;
+  }
+  target.words=JSON.parse(JSON.stringify(dupUndo.before));dupUndo=null;
+  try{localStorage.removeItem('vocab-merge-undo')}catch(e){}
+  const scope=dlg&&dlg.scope||'section';saveNow();render();openDuplicates(scope);stat('합치기 전으로 되돌렸어요');
+}
+document.addEventListener('change',e=>{
+  if(!dlg||dlg.k!=='duplicates'||e.target.dataset.dupIndex===undefined)return;
+  const i=Number(e.target.dataset.dupIndex);
+  dlg.selected=dlg.selected.filter(x=>x!==i);if(e.target.checked)dlg.selected.push(i);
+  // Keep original order so the earliest entry is retained.
+  dlg.selected.sort((a,b)=>a-b);drawDuplicates();
+});
+
 function openMore(){
   dlg={k:'more'};
-  $('#dlg').innerHTML=`<div class="ov"><div class="dl menu" role="dialog" aria-modal="true" aria-label="더보기">${DLX}<button class="mi" data-act="rename">이름 변경</button><button class="mi" data-act="seccolor">색상 변경</button><button class="mi" data-act="movewords">단어 이동</button><button class="mi" data-act="copywords">단어 복사</button><button class="mi" data-act="delwords">단어 선택 삭제</button><button class="mi" data-act="dedupe">중복 단어 정리</button><button class="mi" data-act="tx">텍스트 목록 가져오기 / 내보내기</button><button class="mi" data-act="dlgno">닫기</button></div></div>`;
+  $('#dlg').innerHTML=`<div class="ov"><div class="dl menu" role="dialog" aria-modal="true" aria-label="더보기">${DLX}<button class="mi" data-act="rename">이름 변경</button><button class="mi" data-act="seccolor">색상 변경</button><button class="mi" data-act="movewords">단어 이동</button><button class="mi" data-act="copywords">단어 복사</button><button class="mi" data-act="delwords">단어 선택 삭제</button><button class="mi" data-act="dedupe">중복 확인 / 합치기</button><button class="mi" data-act="tx">텍스트 목록 가져오기 / 내보내기</button><button class="mi" data-act="dlgno">닫기</button></div></div>`;
 }
 function openColorPicker(sid){
   const isFav=sid==='fav';
@@ -731,6 +816,7 @@ function openColorPicker(sid){
 }
 
 function resetAll(){
+  dupUndo=null;try{localStorage.removeItem('vocab-merge-undo')}catch(e){}
   stopPlay();
   S={sections:[],tabs:[]};ensureTabs();S.title='';
   FAVC={};
@@ -1257,38 +1343,16 @@ document.addEventListener('click',e=>{
     const all=s.words.map(w=>w.id);
     view.sel=(view.sel&&view.sel.length===all.length)?[]:all;
   }
-  else if(a==='dedupe'){
-    closeDlg();
-    const cs=sec();if(!cs)return;
-    const seen=new Map(),dupIds=[];
-    cs.words.forEach(w=>{
-      const key=w.w+'\u241F'+w.m;
-      if(seen.has(key)){dupIds.push(w.id)}
-      else seen.set(key,w);
-    });
-    if(!dupIds.length){
-      dlg={k:'info'};
-      $('#dlg').innerHTML=`<div class="ov"><div class="dl" role="dialog" aria-modal="true"><p class="dm">중복 단어가 없어요</p><div class="dr"><button class="btn" data-act="dlgno">닫기</button></div></div></div>`;
-      return;
-    }
-    dlg={k:'dedupe',ids:dupIds};
-    $('#dlg').innerHTML=`<div class="ov"><div class="dl" role="alertdialog" aria-modal="true"><p class="dm">중복 단어 ${dupIds.length}개를 지울까요?</p><p class="ds">단어와 뜻이 모두 같은 항목 중 먼저 추가된 것만 남겨요.</p><div class="dr"><button class="btn ghost" id="dlno" data-act="dlgno">취소</button><button class="btn warn" data-act="dedupeok">지우기</button></div></div></div>`;
-    return;
+  else if(a==='dedupe'){if(player)stopPlay();openDuplicates();return;}
+  else if(a==='dupscope'){openDuplicates(b.dataset.scope);return;}
+  else if(a==='dupsafe'){
+    const items=dlg.items.filter(it=>it.s.id===view.id);
+    const safe=dupPartitions(items).filter(dupSafe).flat();
+    dlg.selected=dlg.items.map((it,i)=>safe.includes(it)?i:-1).filter(i=>i>=0);
+    drawDuplicates();return;
   }
-  else if(a==='dedupeok'){
-    const cs=sec(),ids=(dlg&&dlg.ids)||[];
-    closeDlg();
-    if(!cs||!ids.length)return;
-    const removed=cs.words.filter(w=>ids.includes(w.id));
-    removed.forEach(w=>{
-      const kept=cs.words.find(x=>!ids.includes(x.id)&&x.w===w.w&&x.m===w.m);
-      if(kept){kept.known=!!(kept.known||w.known);kept.star=!!(kept.star||w.star);
-        ['r','e','h'].forEach(k=>{if(!kept[k]&&w[k])kept[k]=w[k]});}
-    });
-    cs.words=cs.words.filter(w=>!ids.includes(w.id));
-    save();render();
-    return;
-  }
+  else if(a==='dupmerge'){mergeDuplicates();return;}
+  else if(a==='dupundo'){undoDuplicates();return;}
   else if(a==='moveask'){openMovePick();return;}
   else if(a==='copyask'){openMovePick();return;}
   else if(a==='delselect'){
@@ -1362,6 +1426,7 @@ document.addEventListener('click',e=>{
     }
     else if(d&&d.k==='s'){stopPlay();const delId=d.id||view.id;S.sections=S.sections.filter(x=>x.id!==delId);if(view.name==='sec'&&view.id===delId)view={name:'home'};save();}
     else if(d&&d.k==='imp'){
+      dupUndo=null;try{localStorage.removeItem('vocab-merge-undo')}catch(e){}
       stopPlay();S.sections=JSON.parse(JSON.stringify(d.data.sections));
       if(Array.isArray(d.data.tabs)&&d.data.tabs.length&&d.data.tabs.every(x=>x&&typeof x.id==='string'&&typeof x.name==='string'))S.tabs=JSON.parse(JSON.stringify(d.data.tabs));
       else ensureTabs();
@@ -1494,10 +1559,12 @@ document.addEventListener('submit',async e=>{
     const more=!!(e.submitter&&e.submitter.value==='more');
     const v={w:d.get('w').trim(),r:(d.get('r')||'').trim(),m:d.get('m').trim(),e:(d.get('e')||'').trim(),h:(d.get('h')||'').trim()};
     const cs=sec();if(!cs)return;
-    const sig=v.w+'\u241F'+v.m;
-    if(cs.words.some(x=>x.w===v.w&&x.m===v.m)&&f.dataset.dupok!==sig){
+    const sig=JSON.stringify([v.w,v.m]);
+    const matches=S.sections.filter(x=>(x.lang||'en')===(cs.lang||'en')).flatMap(x=>x.words.filter(w=>dupTrim(w.w).toLowerCase()===dupTrim(v.w).toLowerCase()).map(w=>({s:x,w})));
+    if(matches.length&&f.dataset.dupok!==sig){
       f.dataset.dupok=sig;
-      const a=f.querySelector('.afm');if(a)a.textContent='이미 있는 단어예요. 다시 누르면 그래도 추가돼요';
+      const a=f.querySelector('.afm');
+      if(a)a.textContent='같은 단어 후보 '+matches.length+'개: '+matches.slice(0,5).map(it=>'['+it.s.name+'] '+it.w.w+' — '+(it.w.m||'뜻 없음')).join(' / ')+(matches.length>5?' 외 '+(matches.length-5)+'개':'')+'. 다시 누르면 별도 항목으로 추가돼요.';
       return;
     }
     delete f.dataset.dupok;
