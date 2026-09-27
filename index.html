@@ -378,7 +378,7 @@ function targetId(last){
   if(start.mode==='sec')return S.sections.some(x=>x.id===start.sec)?start.sec:'';
   return S.sections.some(x=>x.id===last)?last:'';
 }
-const APP_VERSION='Ver.32';
+const APP_VERSION='Ver.1.0';
 const stat=m=>{const e=$('#stat');if(e)e.textContent=m};
 async function flush(){
   if(!ref)return;
@@ -386,7 +386,7 @@ async function flush(){
   busy=true;stat('저장 중…');
   const my=ver;
   const tabsOut=(S.tabs||[]).map(t=>{const c=FAVC[t.id]||t.favColor;return c?Object.assign({},t,{favColor:c}):Object.assign({},t)});
-  try{await ref.set({sections:S.sections,tab,tabs:tabsOut,last:lastId,start,rep,tts:TTS,title:S.title||'',theme:THEME,bgColor:BGCOLOR});sent=my;stat('저장됨 ✓')}
+  try{await ref.set({sections:S.sections,tab,tabs:tabsOut,last:lastId,start,rep,tts:TTS,title:S.title||'',theme:THEME,bgColor:BGCOLOR,bgInt:BGINT});sent=my;stat('저장됨 ✓')}
   catch(e){stat('서버 저장 실패 · 이 기기에는 저장됨')}
   busy=false;
   if(again){again=false;flush()}
@@ -476,6 +476,9 @@ function onDoc(snap){
     const a=document.activeElement;
     if(!(a&&/INPUT|TEXTAREA/.test(a.tagName))&&dlg&&dlg.k==='cfg')openCfg();
   }
+  if(first&&d&&[10,30,60].includes(d.bgInt)){
+    BGINT=d.bgInt;try{localStorage.setItem('vocab-bgint',String(BGINT))}catch(e){}applyBg();
+  }
   if(first&&d&&[0,1,3].includes(d.rep)&&d.rep!==rep){
     rep=d.rep;try{localStorage.setItem('vocab-rep',String(rep))}catch(e){}
     const a=document.activeElement;
@@ -497,10 +500,10 @@ function onDoc(snap){
   try{
     const [db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')]);
     const uid=user?await user.id():null;
-    if(!db||!uid){stat(APP_VERSION);return}
+    if(!db||!uid){stat(APP_VERSION+' · 이 브라우저에 저장');return}
     ref=db.doc('data/users/'+uid+'/vocab');
     ref.onSnapshot(onDoc,()=>stat('동기화 오류 · 이 기기에는 저장됨'));
-  }catch(e){stat(APP_VERSION)}
+  }catch(e){stat(APP_VERSION+' · 이 브라우저에 저장')}
 })();
 let view={name:'home'},study=null;
 
@@ -558,20 +561,54 @@ function closeDlg(){
 $('#dlg').addEventListener('click',e=>{});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(dlg&&dlg.k!=='cfg'&&dlg.k!=='tabs')closeDlg();else if(!dlg&&sheet)closeSheet()}});
 
+function textRows(text){
+  const rows=[];let row='',quoted=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(c==='"'){
+      if(quoted&&text[i+1]==='"'){row+='""';i++;continue}
+      if(quoted||row.trim()===''||/,[ ]*$/.test(row))quoted=!quoted;
+    }
+    if(c==='\n'&&!quoted){rows.push(row);row=''}else row+=c;
+  }
+  if(row)rows.push(row);
+  return rows;
+}
+function parseQuotedRow(l){
+  const fields=[];let i=0;
+  while(i<l.length){
+    while(l[i]===' ')i++;
+    if(l[i++]!=='"')return null;
+    let v='',closed=false;
+    while(i<l.length){
+      if(l[i]==='"'){
+        if(l[i+1]==='"'){v+='"';i+=2;continue}
+        i++;closed=true;break;
+      }
+      v+=l[i++];
+    }
+    if(!closed)return null;
+    fields.push(v);
+    while(l[i]===' ')i++;
+    if(i===l.length)break;
+    if(l[i++]!==',')return null;
+  }
+  return fields.length===4?{w:fields[0],r:fields[1],m:fields[2],e:fields[3]}:null;
+}
 function parseLine(l){
   l=l.trim();if(!l||l[0]==='#')return null;
+  if(l[0]==='"')return parseQuotedRow(l);
   let e='';const i=l.indexOf(' | ');if(i>0){e=l.slice(i+3).trim();l=l.slice(0,i).trim()}
   const p=l.split(/\t|\s*[,，、]\s*/);
-  if(p.length>=3&&/[a-zA-Z]/.test(p[1]))return{w:p[0].trim(),r:p[1].trim(),m:p.slice(2).join(', ').trim(),e};
+  if(p.length>=3&&(!p[1].trim()||/[a-zA-Z]/.test(p[1])))return{w:p[0].trim(),r:p[1].trim(),m:p.slice(2).join(', ').trim(),e};
   const m=l.match(/^(.+?)(?:\t|\s[-–]\s|\s*[,=]\s*)(.+)$/);
   return m?{w:m[1].trim(),r:'',m:m[2].trim(),e}:null;
 }
 function listText(s){
-  const rows=s.words.map(w=>{
-    const c=w.r?[w.w,w.r,w.m]:((/,/.test(w.m)||!/[가-힣]/.test(w.m))?[w.w,'',w.m]:[w.w,w.m]);
-    return c.join(', ')+(w.e?' | '+w.e:'');
-  });
-  return ['# 단어, 발음, 뜻 | 예문(선택)'].concat(rows).join('\n');
+  const quote=v=>'"'+String(v||'').replace(/"/g,'""')+'"';
+  return ['# 단어, 발음, 뜻, 예문 — 따옴표 형식'].concat(
+    s.words.map(w=>[w.w,w.r,w.m,w.e].map(quote).join(', '))
+  ).join('\n');
 }
 async function readText(f){
   const b=await f.arrayBuffer();
@@ -582,7 +619,7 @@ const txmsg=x=>{const m=$('#txm');if(m)m.textContent=x};
 function openTx(){
   const s=sec();if(!s)return;
   dlg={k:'tx'};
-  $('#dlg').innerHTML=`<div class="ov"><div class="dl" role="dialog" aria-modal="true" aria-labelledby="txh">${DLX}<p id="txh" class="dm">텍스트 목록 · ${esc(s.name)}</p><p class="ds">한 줄에 하나씩 <b>단어, 발음, 뜻</b> 형식이에요. 예문은 줄 끝에 <b> | 예문</b>으로 붙여요.</p><textarea id="txt" rows="4" readonly>${esc(listText(s))}</textarea><div class="dr" style="margin:8px 0 14px"><button class="btn ghost" data-act="txcopy">복사</button><button class="btn ghost" data-act="txfile">.txt 저장</button></div><textarea id="txi" rows="4" placeholder="추가할 목록을 여기에 붙여넣으세요"></textarea><div class="dr" style="margin:8px 0"><button class="btn ghost" data-act="txpaste">붙여넣은 목록 추가</button><button class="btn ghost" data-act="txpick">.txt 파일에서 추가</button></div><input type="file" id="txf" accept=".txt,text/plain" hidden><p id="txm" class="ds"></p><div class="dr"><button class="btn" data-act="dlgno">닫기</button></div></div></div>`;
+  $('#dlg').innerHTML=`<div class="ov"><div class="dl" role="dialog" aria-modal="true" aria-labelledby="txh">${DLX}<p id="txh" class="dm">텍스트 목록 · ${esc(s.name)}</p><p class="ds">한 줄에 하나씩 <b>단어, 발음, 뜻</b> 형식을 사용할 수 있어요. 내보낸 따옴표 형식은 쉼표와 줄바꿈도 보존해요. 기존 <b> | 예문</b> 형식도 읽을 수 있어요.</p><textarea id="txt" rows="4" readonly>${esc(listText(s))}</textarea><div class="dr" style="margin:8px 0 14px"><button class="btn ghost" data-act="txcopy">복사</button><button class="btn ghost" data-act="txfile">.txt 저장</button></div><textarea id="txi" rows="4" placeholder="추가할 목록을 여기에 붙여넣으세요"></textarea><div class="dr" style="margin:8px 0"><button class="btn ghost" data-act="txpaste">붙여넣은 목록 추가</button><button class="btn ghost" data-act="txpick">.txt 파일에서 추가</button></div><input type="file" id="txf" accept=".txt,text/plain" hidden><p id="txm" class="ds"></p><div class="dr"><button class="btn" data-act="dlgno">닫기</button></div></div></div>`;
 }
 let DOWNLOADS=null;
 (async()=>{try{DOWNLOADS=await window.claude.use('downloads')}catch(e){DOWNLOADS=null}})();
@@ -602,10 +639,10 @@ async function shareFile(file,say){
 function txImport(text){
   const cs=sec();if(!cs)return;
   let add=0,skip=0,bad=0;
-  text.replace(/^\ufeff/,'').split(/\r?\n/).forEach(l=>{
+  textRows(text.replace(/^\ufeff/,'' )).forEach(l=>{
     if(!l.trim()||l.trim()[0]==='#')return;
     const v=parseLine(l);
-    if(!v||!v.w||!v.m){bad++;return}
+    if(!v||!v.w){bad++;return}
     if(cs.words.some(x=>x.w===v.w&&x.m===v.m)){skip++;return}
     cs.words.push({id:uid(),w:v.w,r:v.r,m:v.m,e:v.e,known:false});add++;
   });
@@ -661,7 +698,7 @@ function doMove(targetId){
   if(!s||!tgt)return;
   const ids=view.sel||[],moving=s.words.filter(w=>ids.includes(w.id));
   moving.forEach(w=>{
-    if(!tgt.words.some(x=>x.w===w.w&&x.m===w.m))tgt.words.push({...w,id:uid()});
+    if(!tgt.words.some(x=>['w','r','m','e','h'].every(k=>(x[k]||'')===(w[k]||''))&&!!x.star===!!w.star&&!!x.known===!!w.known))tgt.words.push({...w,id:uid()});
   });
   s.words=s.words.filter(w=>!ids.includes(w.id));
   view.moving=false;view.sel=[];view.moveMode=null;
@@ -672,7 +709,7 @@ function doCopy(targetId){
   if(!s||!tgt)return;
   const ids=view.sel||[],copying=s.words.filter(w=>ids.includes(w.id));
   copying.forEach(w=>{
-    if(!tgt.words.some(x=>x.w===w.w&&x.m===w.m))tgt.words.push({...w,id:uid()});
+    if(!tgt.words.some(x=>['w','r','m','e','h'].every(k=>(x[k]||'')===(w[k]||''))&&!!x.star===!!w.star&&!!x.known===!!w.known))tgt.words.push({...w,id:uid()});
   });
   view.moving=false;view.sel=[];view.moveMode=null;
   closeDlg();save();render();
@@ -698,20 +735,20 @@ function resetAll(){
   S={sections:[],tabs:[]};ensureTabs();S.title='';
   FAVC={};
   tab=(S.tabs[0]||{id:''}).id;
-  THEME='light';BGCOLOR='';applyTheme();applyBg();
+  THEME='light';BGCOLOR='';BGINT=60;applyTheme();applyBg();
   TTS={rate:.9,gap:1,readMeaning:false};
   rep=1;
   start={mode:'last',sec:''};
   lastId='';startLast='';
   view={name:'home'};study=null;
   try{
-    ['vocab-v1','vocab-favcolor','vocab-theme','vocab-bgcolor','vocab-tts','vocab-rep','vocab-start','vocab-last','vocab-tab'].forEach(k=>localStorage.removeItem(k));
+    ['vocab-v1','vocab-favcolor','vocab-theme','vocab-bgcolor','vocab-bgint','vocab-tts','vocab-rep','vocab-start','vocab-last','vocab-tab'].forEach(k=>localStorage.removeItem(k));
   }catch(e){}
   save();
 }
 function openBk(){
   dlg={k:'bk'};
-  const json=JSON.stringify({v:2,sections:S.sections,tabs:S.tabs,tab,start,title:S.title||'',theme:THEME,bgColor:BGCOLOR});
+  const json=JSON.stringify({v:3,sections:S.sections,tabs:S.tabs,tab,start,last:lastId,rep,tts:TTS,title:S.title||'',theme:THEME,bgColor:BGCOLOR,bgInt:BGINT});
   $('#dlg').innerHTML=`<div class="ov"><div class="dl" role="dialog" aria-modal="true" aria-labelledby="bkh"><p id="bkh" class="dm">백업 / 복원</p><p id="bkm" class="ds"></p><p class="ds">다른 기기나 앱에서 불러올 수 있어요!</p><textarea id="bkt" rows="3" readonly hidden>${esc(json)}</textarea><div class="dr" style="margin:8px 0"><button class="btn ghost" data-act="bkfile">파일 저장</button><button class="btn ghost" data-act="bkpick">파일 불러오기</button></div><input type="file" id="bkf" accept="application/json,.json" hidden><div class="dr"><button class="btn" data-act="dlgno">닫기</button></div></div></div>`;
 }
 const bkmsg=x=>{const m=$('#bkm');if(m)m.textContent=x};
@@ -755,7 +792,7 @@ function openCfg(){
   const bgSw=`<button class="csw${BGCOLOR?'':' on'}" data-act="pickbg" data-c="" aria-label="기본 배경색">✕</button>`+
     PASTELS.map(c=>`<button class="csw${BGCOLOR===c?' on':''}" data-act="pickbg" data-c="${c}" style="background:${c}" aria-label="파스텔 배경색"></button>`).join('');
   const bgIntRow=BGCOLOR?`<p class="ds" style="margin:8px 0 6px">농도</p><div class="rp" style="margin:0">${BGINT_STEPS.map(([v,,l])=>`<button class="pill${BGINT===v?' on':''}" data-act="pickbgint" data-v="${v}">${l}</button>`).join('')}</div>`:'';
-  $('#dlg').innerHTML=`<div class="ov cfgov"><div class="dl cfgdl" role="dialog" aria-modal="true" aria-labelledby="cfgt"><p id="cfgt" class="dm">설정</p><p class="dm" style="margin-top:4px">시작 화면</p><p class="ds">앱을 다시 열 때 처음 보이는 화면을 골라요.</p>${r('last','마지막 화면')}${r('home','첫 화면')}${r('sec','섹션 지정')}<select id="ss" style="margin:8px 0 4px" aria-label="시작 섹션"${secs.length?'':' disabled'}>${opts||'<option>섹션이 없어요</option>'}</select><p class="dm" style="margin-top:4px!important">배경</p>${rt('system','시스템 설정 따름')}${rt('light','기본 (라이트)')}${rt('dark','다크')}<p class="ds" style="margin:6px 0 6px">배경 색상 (라이트 모드에서만 적용돼요)</p><div class="cgrid">${bgSw}</div>${bgIntRow}<p class="dm" style="margin-top:16px">발음 음성</p>${S.tabs.filter(t0=>t0.audio!==false).map(t0=>{
+  $('#dlg').innerHTML=`<div class="ov cfgov"><div class="dl cfgdl" role="dialog" aria-modal="true" aria-labelledby="cfgt"><p id="cfgt" class="dm">설정</p><p class="ds">${APP_VERSION} · ${ref?'계정 동기화 연결됨':'이 브라우저에 저장 · 기기 간 자동 동기화 없음'}</p><p class="dm" style="margin-top:4px">시작 화면</p><p class="ds">앱을 다시 열 때 처음 보이는 화면을 골라요.</p>${r('last','마지막 화면')}${r('home','첫 화면')}${r('sec','섹션 지정')}<select id="ss" style="margin:8px 0 4px" aria-label="시작 섹션"${secs.length?'':' disabled'}>${opts||'<option>섹션이 없어요</option>'}</select><p class="dm" style="margin-top:4px!important">배경</p>${rt('system','시스템 설정 따름')}${rt('light','기본 (라이트)')}${rt('dark','다크')}<p class="ds" style="margin:6px 0 6px">배경 색상 (라이트 모드에서만 적용돼요)</p><div class="cgrid">${bgSw}</div>${bgIntRow}<p class="dm" style="margin-top:16px">발음 음성</p>${S.tabs.filter(t0=>t0.audio!==false).map(t0=>{
     const has=voicesOf(t0.id).length>0;
     const hint=has?'':`<p class="ds" style="margin:2px 0 8px">${esc(t0.name)} 음성이 없어요. 안드로이드는 기기 설정 → 일반 관리(또는 시스템) → 언어 및 입력 → 텍스트 음성 변환 출력 → Google 음성 엔진 → 언어에서 해당 언어 음성 데이터를 내려받으면 나타나요.</p>`;
     return `<div class="vrow"><div class="selwrap"><select id="vo-${t0.id}" data-tab="${t0.id}" aria-label="${esc(t0.name)} 음성">${voiceOptions(t0.id)}</select></div><button class="btn ghost sm" data-act="vprev" data-l="${t0.id}" ${has?'':'disabled'}>▶ ${esc(t0.name)}</button></div>${hint}`;
@@ -1226,7 +1263,7 @@ document.addEventListener('click',e=>{
     const seen=new Map(),dupIds=[];
     cs.words.forEach(w=>{
       const key=w.w+'\u241F'+w.m;
-      if(seen.has(key)){dupIds.push(w.id);if(w.known)seen.get(key).known=true}
+      if(seen.has(key)){dupIds.push(w.id)}
       else seen.set(key,w);
     });
     if(!dupIds.length){
@@ -1242,6 +1279,12 @@ document.addEventListener('click',e=>{
     const cs=sec(),ids=(dlg&&dlg.ids)||[];
     closeDlg();
     if(!cs||!ids.length)return;
+    const removed=cs.words.filter(w=>ids.includes(w.id));
+    removed.forEach(w=>{
+      const kept=cs.words.find(x=>!ids.includes(x.id)&&x.w===w.w&&x.m===w.m);
+      if(kept){kept.known=!!(kept.known||w.known);kept.star=!!(kept.star||w.star);
+        ['r','e','h'].forEach(k=>{if(!kept[k]&&w[k])kept[k]=w[k]});}
+    });
     cs.words=cs.words.filter(w=>!ids.includes(w.id));
     save();render();
     return;
@@ -1327,7 +1370,25 @@ document.addEventListener('click',e=>{
       if(typeof d.data.title==='string')S.title=d.data.title;
       if(typeof d.data.theme==='string'&&['light','dark','system'].includes(d.data.theme)){THEME=d.data.theme;try{localStorage.setItem('vocab-theme',THEME)}catch(e){}applyTheme();}
       if(typeof d.data.bgColor==='string'){BGCOLOR=d.data.bgColor;try{localStorage.setItem('vocab-bgcolor',BGCOLOR)}catch(e){}applyBg();}
-      view={name:'home'};study=null;save();
+      if(d.data.start&&['last','home','sec'].includes(d.data.start.mode))start={mode:d.data.start.mode,sec:d.data.start.sec||''};
+      if([0,1,3].includes(d.data.rep))rep=d.data.rep;
+      if(d.data.tts&&typeof d.data.tts==='object'){
+        TTS={...d.data.tts,rate:[.7,.9,1.1].includes(d.data.tts.rate)?d.data.tts.rate:.9,
+          gap:[1,1.5].includes(d.data.tts.gap)?d.data.tts.gap:1,readMeaning:d.data.tts.readMeaning!==false};
+      }
+      if([10,30,60].includes(d.data.bgInt))BGINT=d.data.bgInt;
+      FAVC={};S.tabs.forEach(t=>{if(t.favColor)FAVC[t.id]=t.favColor});
+      lastId=targetId(d.data.last||'');startLast=lastId;
+      try{
+        localStorage.setItem('vocab-start',JSON.stringify(start));
+        localStorage.setItem('vocab-tts',JSON.stringify(TTS));
+        localStorage.setItem('vocab-rep',String(rep));
+        localStorage.setItem('vocab-bgint',String(BGINT));
+        localStorage.setItem('vocab-favcolor',JSON.stringify(FAVC));
+        localStorage.setItem('vocab-tab',tab);
+        localStorage.setItem('vocab-last',lastId);
+      }catch(e){}
+      applyBg();view=lastId?{name:'sec',id:lastId}:{name:'home'};study=null;save();
     }
     else if(d&&d.k==='resetall'){resetAll();}
   }
